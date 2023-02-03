@@ -33,7 +33,7 @@ def create_outputs():
     # iterate over files in
     # that directory
     folders = Path(directory).glob('*')
-    #first_next_month = pd.Series([], dtype=pd.StringDtype())
+    empty_list = [None]*700
     for folder in folders:
         try:
             files = Path(str(folder)).glob('*')
@@ -43,8 +43,6 @@ def create_outputs():
             for file in files:
                 df = pd.read_csv(file, on_bad_lines='skip', index_col=False)
                 out_df.columns = list(df.columns)
-                """ if not first_next_month.empty and first_next_month['observe_time'][5:7] == str(folder)[10:]:
-                    out_df.loc[0] = first_next_month """
                 # TO DO :
                 # Sorting by column 'observe_time' may required. Default is that they are sorted in decending order
                 # df.sort_values(by=['observe_time'])
@@ -68,7 +66,7 @@ def create_outputs():
                                 ):
                                     if missed_line[0][:10] != str(
                                         date_read.date()
-                                    ): # for the first hour we may need to use the current date to avoid wrong day!
+                                    ):  # for the first hour we may need to use the current date to avoid wrong day!
                                         currect_date = date_read.date()
                                     else:
                                         currect_date = None
@@ -79,17 +77,15 @@ def create_outputs():
                                                                        ):
                                         missed_line = create_missed_line(missed_line, current_hour)
                                     else:
-                                        empty_list = [None]*700
                                         missed_date = [time_stamp[:11] + f'{current_hour:02}' + time_stamp[13::]]
                                         missed_line = missed_date + empty_list
-                                        print('no data found')
+                                        logger.info(f'no data found for {missed_date}')
                                 out_df.loc[len(out_df.index)] = missed_line
 
                                 current_hour += 1
                             current_hour = date_read.hour + 1
                             if current_hour > 23:
                                 current_hour = 0
-                        ############################################
                         if date_read.minute == 0 and f'{date_read.month :02}' == str(folder)[10:]:
                             out_df.loc[len(out_df.index)] = df.iloc[idx]
 
@@ -102,6 +98,7 @@ def create_outputs():
 
 
 def create_missed_line(missed_line, current_hour, correct_date=None):
+    """This function creates proper output to be inserted to the dataframe missed row."""
     date_missed = datetime.fromisoformat(missed_line[0])
     d1 = date_missed.replace(hour=current_hour, minute=0, day=correct_date.day if correct_date else date_missed.day)
     missed_line[0] = str(d1)
@@ -109,13 +106,14 @@ def create_missed_line(missed_line, current_hour, correct_date=None):
 
 
 def find_missed_hour(dir_path, missed_hour):
+    """This function searchs for a given time stamp and returns the corresponding data for that if it exist."""
     for file in os.listdir(dir_path):
         cur_path = os.path.join(dir_path, file)
     # check if it is a file
         if os.path.isfile(cur_path):
             with open(cur_path, 'r') as fp:
                 if missed_hour in fp.read():
-                    print(f'string found for {missed_hour} in {dir_path}')
+                    logger.info(f'Data found for {missed_hour} in {dir_path}')
                     with open(cur_path, 'rt') as f:
                         reader = csv.reader(f, delimiter=',')
                         for row in reader:
@@ -124,12 +122,44 @@ def find_missed_hour(dir_path, missed_hour):
     return []
 
 
+def post_processing():
+    """This function search and finds the missing data in the generated outputs and then inserts the missing data."""
+    files = Path('outputs').glob('*')
+    empty_list = [None]*700
+    for file in files:
+        df = pd.read_csv(file, on_bad_lines='skip', index_col=False)
+
+        if df.shape[0] not in [720, 744]:  # 30 days or 31 days
+            logger.info(f'Some missing data were detected in {file}')
+            df['observe_time'] = pd.to_datetime(df['observe_time'])
+            my_range = pd.date_range(start=str(df.iloc[10][0]), end=str(df.iloc[df.shape[0]-1][0]), freq='h')
+
+            missing_hours = my_range.difference(df['observe_time'])
+            logger.info(f'{missing_hours} were detected in {file}')
+            lst = [[str(missed_hour)] + empty_list for missed_hour in missing_hours]
+            df_range = pd.DataFrame(lst)
+            df_range.columns = df.columns
+
+            df_range['observe_time'] = pd.to_datetime(df_range['observe_time'])
+            frames = [df, df_range]
+
+            result = pd.concat(frames)
+            result.sort_values(by='observe_time', inplace=True)
+            result.to_csv(
+                str(file),
+                index=False,
+                lineterminator='\n',
+                errors='replace',
+            )
+    return None
+
+
 def main():
     logger.info('Data cleaning and creating out puts is starting ... ')
     try:
         create_outputs()
-        #logger.info('Inseting the missing data process is starting ... ')
-        #find_insert_missing_rows()
+        logger.info('Inserting the missing data process is starting ... ')
+        post_processing()
     except Exception as e:
         logger.error(f'Failed to prepare data due to {e}')
     logger.info('Data processing is complete.')
